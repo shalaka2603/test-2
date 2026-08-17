@@ -25,9 +25,17 @@
 const fs = require("fs");
 const path = require("path");
 
-const ROOT = __dirname;
+// Use the current working directory (where the build command actually
+// runs) rather than __dirname. In some CI/build environments these can
+// differ, and cwd is what "Build output directory: ." in Cloudflare
+// actually refers to.
+const ROOT = process.cwd();
 const OUTPUT_FILE = "dashboards.html";
 const SKIP_FILES = new Set([OUTPUT_FILE]);
+
+console.log("build.js starting");
+console.log("  __dirname:  " + __dirname);
+console.log("  cwd:        " + ROOT);
 
 function readMeta(content) {
   const tag = content.match(/<!--\s*hub:tag\s+(.*?)\s*-->/);
@@ -49,15 +57,23 @@ function escapeHtml(str) {
 }
 
 function buildCards() {
-  const files = fs.readdirSync(ROOT).filter(
+  const allEntries = fs.readdirSync(ROOT);
+  console.log("  All entries in ROOT: " + JSON.stringify(allEntries));
+
+  const files = allEntries.filter(
     (f) => f.endsWith(".html") && !SKIP_FILES.has(f)
   );
+  console.log("  HTML files found (excluding " + OUTPUT_FILE + "): " + JSON.stringify(files));
 
   const cards = [];
   for (const file of files) {
     const content = fs.readFileSync(path.join(ROOT, file), "utf8");
     const meta = readMeta(content);
-    if (!meta) continue;
+    if (!meta) {
+      console.log("  - " + file + ": no hub: comments found, skipping");
+      continue;
+    }
+    console.log("  - " + file + ": matched -> \"" + meta.title + "\"");
     cards.push(`
     <a class="card" href="${escapeHtml(file)}">
       <span class="tag">${escapeHtml(meta.tag)}</span>
@@ -66,6 +82,8 @@ function buildCards() {
       <div class="go">Open dashboard &rarr;</div>
     </a>`);
   }
+
+  console.log("  Total cards generated: " + cards.length);
 
   if (cards.length === 0) {
     return `
@@ -154,6 +172,12 @@ const TEMPLATE = `<!DOCTYPE html>
 </html>
 `;
 
-const html = TEMPLATE.replace("{{CARDS}}", buildCards());
-fs.writeFileSync(path.join(ROOT, OUTPUT_FILE), html);
-console.log(`✔ dashboards.html regenerated.`);
+try {
+  const html = TEMPLATE.replace("{{CARDS}}", buildCards());
+  const outPath = path.join(ROOT, OUTPUT_FILE);
+  fs.writeFileSync(outPath, html);
+  console.log("✔ dashboards.html written to: " + outPath);
+} catch (err) {
+  console.error("✘ build.js failed: " + err.message);
+  process.exit(1); // non-zero exit so Cloudflare marks the deployment as failed instead of silently succeeding
+}
